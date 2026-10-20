@@ -61,10 +61,68 @@ public sealed class LinkServiceTests
         Assert.Equal(new[] { "ABC1234", "XYZ5678" }, repository.Attempts.Select(link => link.Code));
     }
 
+    [Theory]
+    [InlineData("AB1I")]
+    [InlineData("ABCDEFGHIJKLMNOPQRST")]
+    public async Task CreatesCustomCodeWithoutGenerating(string code)
+    {
+        var repository = new RecordingRepository();
+        var service = new LinkService(repository, () => throw new InvalidOperationException(), new TargetUrlValidator());
+
+        var result = await service.CreateAsync("https://8.8.8.8", code);
+
+        Assert.Null(result.Error);
+        Assert.Equal(code, result.Code);
+        Assert.Equal(code, Assert.Single(repository.Attempts).Code);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("ABC")]
+    [InlineData("ABCDEFGHIJKLMNOPQRSTU")]
+    [InlineData("ABC0")]
+    [InlineData("abc1")]
+    [InlineData("ABC ")]
+    [InlineData("ABC-")]
+    [InlineData("ÁBC1")]
+    [InlineData("ABC\n")]
+    public async Task InvalidCustomCodeDoesNotPersist(string code)
+    {
+        var repository = new RecordingRepository();
+        var service = new LinkService(repository, () => throw new InvalidOperationException(), new TargetUrlValidator());
+
+        var result = await service.CreateAsync("https://8.8.8.8", code);
+
+        Assert.NotNull(result.Error);
+        Assert.False(result.IsConflict);
+        Assert.Empty(repository.Attempts);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DuplicateCustomCodeReturnsConflictIncludingInsertRace(bool existsBeforeInsert)
+    {
+        var repository = new RecordingRepository { Exists = existsBeforeInsert, Collisions = 1 };
+        var service = new LinkService(repository, () => throw new InvalidOperationException(), new TargetUrlValidator());
+
+        var result = await service.CreateAsync("https://8.8.8.8", "ABCD");
+
+        Assert.True(result.IsConflict);
+        Assert.Contains("já está em uso", result.Error);
+        Assert.Null(result.Code);
+        Assert.Null(result.ManagementKey);
+        Assert.Equal(existsBeforeInsert ? 0 : 1, repository.Attempts.Count);
+    }
+
     private sealed class RecordingRepository : ILinkRepository
     {
         public List<Link> Attempts { get; } = [];
         public int Collisions { get; init; }
+        public bool Exists { get; init; }
+
+        public Task<bool> CodeExistsAsync(string code, CancellationToken cancellationToken)
+            => Task.FromResult(Exists);
 
         public Task<bool> TryAddAsync(Link link, CancellationToken cancellationToken)
         {

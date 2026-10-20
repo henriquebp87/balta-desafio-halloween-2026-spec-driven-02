@@ -6,6 +6,9 @@ namespace UrlShortener.Api.Data;
 
 public sealed class LinkRepository(AppDbContext context) : ILinkRepository
 {
+    public Task<bool> CodeExistsAsync(string code, CancellationToken cancellationToken)
+        => context.Links.AnyAsync(link => link.Code == code, cancellationToken);
+
     public async Task<bool> TryAddAsync(Link link, CancellationToken cancellationToken)
     {
         context.Links.Add(link);

@@ -76,6 +76,47 @@ public sealed class LinkEndpointsTests
         });
     }
 
+    [Fact]
+    public async Task PostCustomCodeReturns201Then409WithoutReplacingLink()
+    {
+        await WithApi(async (client, options) =>
+        {
+            using var created = await client.PostAsJsonAsync("/api/links", new { targetUrl = "https://8.8.8.8/path", code = "MYLINK19" });
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+            var body = await created.Content.ReadFromJsonAsync<CreateLinkResponse>();
+            Assert.Equal("MYLINK19", body!.Code);
+            Assert.Equal($"{client.BaseAddress}MYLINK19", body.ShortUrl);
+            Assert.Equal(body.ShortUrl, created.Headers.Location!.ToString());
+
+            using var duplicate = await client.PostAsJsonAsync("/api/links", new { targetUrl = "https://1.1.1.1", code = "MYLINK19" });
+            Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+            var problem = await duplicate.Content.ReadFromJsonAsync<Microsoft.AspNetCore.Mvc.ProblemDetails>();
+            Assert.Equal(409, problem!.Status);
+            Assert.Contains("já está em uso", problem.Detail);
+            await using var verification = new AppDbContext(options);
+            Assert.Equal("https://8.8.8.8/path", (await verification.Links.SingleAsync()).TargetUrl);
+        });
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("ABC")]
+    [InlineData("abc0")]
+    public async Task PostInvalidCustomCodeReturns400ProblemDetails(string code)
+    {
+        await WithApi(async (client, options) =>
+        {
+            using var response = await client.PostAsJsonAsync("/api/links", new { targetUrl = "https://8.8.8.8", code });
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType!.MediaType);
+            var problem = await response.Content.ReadFromJsonAsync<Microsoft.AspNetCore.Mvc.ProblemDetails>();
+            Assert.Equal(400, problem!.Status);
+            Assert.Contains("código", problem.Detail);
+            await using var verification = new AppDbContext(options);
+            Assert.Empty(await verification.Links.ToListAsync());
+        });
+    }
+
     private static async Task WithApi(Func<HttpClient, DbContextOptions<AppDbContext>, Task> test)
     {
         var connectionString = $"Data Source=T05-{Guid.NewGuid():N};Mode=Memory;Cache=Shared";
