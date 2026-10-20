@@ -4,11 +4,23 @@ namespace UrlShortener.Api.Endpoints;
 
 public sealed record CreateLinkRequest(string? TargetUrl, string? Code = null);
 public sealed record CreateLinkResponse(string ShortUrl, string Code, string ManagementKey);
+public sealed record LinkStatsResponse(long AccessCount);
 
 public static class LinkEndpoints
 {
     public static void MapLinkEndpoints(this WebApplication app)
     {
+        app.MapGet("/api/links/{code}/stats", async (string code,
+            LinkService service, CancellationToken cancellationToken) =>
+        {
+            var result = await service.GetStatsAsync(code, cancellationToken);
+            return result.Status switch
+            {
+                LinkStatsStatus.Found => Results.Ok(new LinkStatsResponse(result.AccessCount!.Value)),
+                _ => Results.Problem(statusCode: 404, title: "Link não encontrado.")
+            };
+        });
+
         app.MapGet("/{code}", async (string code, LinkService service, CancellationToken cancellationToken) =>
         {
             var result = await service.ResolveAsync(code, cancellationToken);

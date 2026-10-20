@@ -18,6 +18,59 @@ namespace UrlShortener.Api.Tests.Endpoints;
 public sealed class LinkEndpointsTests
 {
     [Fact]
+    public async Task StatsWithoutKeyReturnsPersistedCountWithoutIncrementing()
+    {
+        await WithApi(async (client, options) =>
+        {
+            using var created = await client.PostAsJsonAsync("/api/links", new { targetUrl = "https://8.8.8.8/path" });
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+            var body = (await created.Content.ReadFromJsonAsync<CreateLinkResponse>())!;
+            using var redirect = await client.GetAsync(body.ShortUrl);
+            Assert.Equal(HttpStatusCode.Found, redirect.StatusCode);
+
+            using var response = await client.GetAsync($"/api/links/{body.Code}/stats");
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var stats = await response.Content.ReadFromJsonAsync<LinkStatsResponse>();
+            Assert.Equal(1, stats!.AccessCount);
+            var json = await response.Content.ReadAsStringAsync();
+            Assert.DoesNotContain("managementKey", json, StringComparison.OrdinalIgnoreCase);
+            await using var verification = new AppDbContext(options);
+            Assert.Equal(1, (await verification.Links.SingleAsync()).AccessCount);
+        });
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("wrong-key")]
+    public async Task StatsIgnoresManagementKeyHeader(string? key)
+    {
+        await WithApi(async (client, _) =>
+        {
+            using var created = await client.PostAsJsonAsync("/api/links", new { targetUrl = "https://8.8.8.8" });
+            var body = (await created.Content.ReadFromJsonAsync<CreateLinkResponse>())!;
+            if (key is not null)
+                client.DefaultRequestHeaders.Add("X-Management-Key", key);
+
+            using var response = await client.GetAsync($"/api/links/{body.Code}/stats");
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var stats = await response.Content.ReadFromJsonAsync<LinkStatsResponse>();
+            Assert.Equal(0, stats!.AccessCount);
+        });
+    }
+
+    [Fact]
+    public async Task StatsForMissingCodeReturns404()
+    {
+        await WithApi(async (client, _) =>
+        {
+            using var response = await client.GetAsync("/api/links/MISSING/stats");
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        });
+    }
+
+    [Fact]
     public async Task ConcurrentRepeatedAccessesIncrementPersistedCountWithoutLoss()
     {
         await WithApi(async (client, options) =>

@@ -8,6 +8,41 @@ namespace UrlShortener.Api.Tests.Application;
 
 public sealed class LinkServiceTests
 {
+    [Fact]
+    public async Task StatsRequiresOnlyCodeWithoutChangingCount()
+    {
+        var link = new Link
+        {
+            Code = "ABC1234", TargetUrl = "https://8.8.8.8", AccessCount = 42,
+            ExpiresAtUtc = DateTime.UtcNow.AddDays(-1),
+            ManagementKeyHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("secret")))
+        };
+        var repository = new RecordingRepository { StoredLink = link };
+        var service = new LinkService(repository, () => throw new InvalidOperationException(), new TargetUrlValidator());
+
+        var result = await service.GetStatsAsync(link.Code);
+
+        Assert.Equal(LinkStatsStatus.Found, result.Status);
+        Assert.Equal(42, result.AccessCount);
+        Assert.Equal(link.Code, repository.RequestedCode);
+        Assert.Equal(42, link.AccessCount);
+        Assert.Empty(repository.IncrementedLinkIds);
+        Assert.Empty(repository.Attempts);
+    }
+
+    [Fact]
+    public async Task StatsForMissingCodeReturnsNotFound()
+    {
+        var repository = new RecordingRepository();
+        var service = new LinkService(repository, () => throw new InvalidOperationException(), new TargetUrlValidator());
+
+        var result = await service.GetStatsAsync("MISSING");
+
+        Assert.Equal(LinkStatsStatus.NotFound, result.Status);
+        Assert.Null(result.AccessCount);
+        Assert.Empty(repository.IncrementedLinkIds);
+    }
+
     [Theory]
     [InlineData(null, ResolveLinkStatus.Found)]
     [InlineData("2026-10-18T23:59:59Z", ResolveLinkStatus.Expired)]

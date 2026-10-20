@@ -8,6 +8,8 @@ namespace UrlShortener.Api.Application;
 public sealed record CreateLinkResult(string? Code, string? ManagementKey, string? Error, bool IsConflict = false);
 public enum ResolveLinkStatus { Found, NotFound, Expired }
 public sealed record ResolveLinkResult(ResolveLinkStatus Status, string? TargetUrl = null);
+public enum LinkStatsStatus { Found, NotFound }
+public sealed record LinkStatsResult(LinkStatsStatus Status, long? AccessCount = null);
 
 public sealed class LinkService(
     ILinkRepository repository,
@@ -15,6 +17,16 @@ public sealed class LinkService(
     TargetUrlValidator validator,
     TimeProvider? timeProvider = null)
 {
+    public async Task<LinkStatsResult> GetStatsAsync(string code,
+        CancellationToken cancellationToken = default)
+    {
+        var link = await repository.FindByCodeAsync(code, cancellationToken);
+        if (link is null)
+            return new(LinkStatsStatus.NotFound);
+
+        return new(LinkStatsStatus.Found, link.AccessCount);
+    }
+
     public async Task<ResolveLinkResult> ResolveAsync(string code, CancellationToken cancellationToken = default)
     {
         var link = await repository.FindByCodeAsync(code, cancellationToken);
