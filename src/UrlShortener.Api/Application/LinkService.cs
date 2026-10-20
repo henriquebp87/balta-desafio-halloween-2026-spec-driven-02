@@ -15,7 +15,8 @@ public sealed class LinkService(
     ILinkRepository repository,
     Func<string> generateCode,
     TargetUrlValidator validator,
-    TimeProvider? timeProvider = null)
+    TimeProvider? timeProvider = null,
+    LinkRedirectCache? redirectCache = null)
 {
     public async Task<LinkStatsResult> GetStatsAsync(string code,
         CancellationToken cancellationToken = default)
@@ -29,11 +30,19 @@ public sealed class LinkService(
 
     public async Task<ResolveLinkResult> ResolveAsync(string code, CancellationToken cancellationToken = default)
     {
-        var link = await repository.FindByCodeAsync(code, cancellationToken);
+        var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
+        var link = redirectCache?.Get(code, now);
         if (link is null)
-            return new(ResolveLinkStatus.NotFound);
+        {
+            var storedLink = await repository.FindByCodeAsync(code, cancellationToken);
+            if (storedLink is null)
+                return new(ResolveLinkStatus.NotFound);
 
-        var todayUtc = (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime.Date;
+            link = new CachedRedirect(storedLink.Id, storedLink.TargetUrl, storedLink.ExpiresAtUtc);
+            redirectCache?.Set(code, link, now);
+        }
+
+        var todayUtc = now.UtcDateTime.Date;
         if (link.ExpiresAtUtc is { } expiration && expiration.Date < todayUtc)
             return new(ResolveLinkStatus.Expired);
 

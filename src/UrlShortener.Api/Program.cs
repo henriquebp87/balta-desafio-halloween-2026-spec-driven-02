@@ -16,10 +16,12 @@ public partial class Program
         builder.Services.AddScoped<ILinkRepository, LinkRepository>();
         builder.Services.AddSingleton<LinkCodeGenerator>();
         builder.Services.AddSingleton<TargetUrlValidator>();
+        builder.Services.AddSingleton<LinkRedirectCache>();
         builder.Services.AddScoped<LinkService>(services => new LinkService(
             services.GetRequiredService<ILinkRepository>(),
             services.GetRequiredService<LinkCodeGenerator>().Generate,
-            services.GetRequiredService<TargetUrlValidator>()));
+            services.GetRequiredService<TargetUrlValidator>(),
+            redirectCache: services.GetRequiredService<LinkRedirectCache>()));
         configure?.Invoke(builder);
 
         var app = builder.Build();

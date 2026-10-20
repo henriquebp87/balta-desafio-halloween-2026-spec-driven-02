@@ -20,6 +20,12 @@ do projeto.
 - D-04: unicidade do código garantida por índice único no banco, além da
   checagem no serviço, porque a checagem sozinha tem corrida
 - D-05: chave de gerenciamento da DC-03 armazenada como hash, nunca em texto puro
+- D-06 (T-10): cache de redirects singleton em memória, limitado a 1024 links,
+  com descarte do menos recentemente acessado (LRU) e validade absoluta de
+  cinco minutos. Guarda apenas ID, destino e expiração, sem entidades EF ou
+  chaves de gerenciamento. A expiração é verificada em cada redirect e o
+  contador continua usando UPDATE atômico; estatísticas consultam o banco.
+  Usa coleções da biblioteca padrão, sem novas dependências.
 
 ## Modelo de dados
 Link

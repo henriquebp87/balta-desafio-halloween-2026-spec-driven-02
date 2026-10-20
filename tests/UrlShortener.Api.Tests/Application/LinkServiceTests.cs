@@ -9,6 +9,67 @@ namespace UrlShortener.Api.Tests.Application;
 public sealed class LinkServiceTests
 {
     [Fact]
+    public async Task CachedRedirectIsSharedAcrossServicesAndStillIncrementsEveryAccess()
+    {
+        var repository = new RecordingRepository
+        {
+            StoredLink = new Link { Id = 42, Code = "ABCD", TargetUrl = "https://8.8.8.8", ManagementKeyHash = "hash" }
+        };
+        var cache = new LinkRedirectCache();
+        var first = new LinkService(repository, () => "unused", new TargetUrlValidator(), redirectCache: cache);
+        var second = new LinkService(repository, () => "unused", new TargetUrlValidator(), redirectCache: cache);
+
+        var initial = await first.ResolveAsync("ABCD");
+        var cached = await second.ResolveAsync("ABCD");
+        var stats = await second.GetStatsAsync("ABCD");
+
+        Assert.Equal(initial, cached);
+        Assert.Equal(ResolveLinkStatus.Found, cached.Status);
+        Assert.Equal(new long[] { 42, 42 }, repository.IncrementedLinkIds);
+        Assert.Equal(2, repository.ReadCount); // One redirect lookup and one fresh stats lookup.
+        Assert.Equal(LinkStatsStatus.Found, stats.Status);
+    }
+
+    [Fact]
+    public async Task CachedLinkIsRecheckedForExpirationAtUtcMidnight()
+    {
+        var clock = new MutableTimeProvider();
+        var repository = new RecordingRepository
+        {
+            StoredLink = new Link
+            {
+                Id = 42, Code = "ABCD", TargetUrl = "https://8.8.8.8", ManagementKeyHash = "hash",
+                ExpiresAtUtc = clock.Now.UtcDateTime.Date
+            }
+        };
+        var service = new LinkService(repository, () => "unused", new TargetUrlValidator(), clock, new LinkRedirectCache());
+
+        Assert.Equal(ResolveLinkStatus.Found, (await service.ResolveAsync("ABCD")).Status);
+        clock.Now = clock.Now.AddSeconds(2);
+        Assert.Equal(ResolveLinkStatus.Expired, (await service.ResolveAsync("ABCD")).Status);
+        Assert.Equal(1, repository.ReadCount);
+        Assert.Single(repository.IncrementedLinkIds);
+    }
+
+    [Fact]
+    public async Task MissingRedirectIsNotCached()
+    {
+        var repository = new RecordingRepository();
+        var service = new LinkService(repository, () => "unused", new TargetUrlValidator(), redirectCache: new LinkRedirectCache());
+
+        Assert.Equal(ResolveLinkStatus.NotFound, (await service.ResolveAsync("MISSING")).Status);
+        Assert.Equal(ResolveLinkStatus.NotFound, (await service.ResolveAsync("MISSING")).Status);
+        Assert.Equal(2, repository.ReadCount);
+        Assert.Empty(repository.IncrementedLinkIds);
+    }
+
+    private sealed class MutableTimeProvider : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = new(2026, 10, 19, 23, 59, 59, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    [Fact]
     public async Task StatsRequiresOnlyCodeWithoutChangingCount()
     {
         var link = new Link
@@ -210,9 +271,11 @@ public sealed class LinkServiceTests
 
         public Link? StoredLink { get; init; }
         public string? RequestedCode { get; private set; }
+        public int ReadCount { get; private set; }
 
         public Task<Link?> FindByCodeAsync(string code, CancellationToken cancellationToken)
         {
+            ReadCount++;
             RequestedCode = code;
             return Task.FromResult(StoredLink);
         }
