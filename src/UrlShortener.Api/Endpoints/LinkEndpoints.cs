@@ -9,6 +9,17 @@ public static class LinkEndpoints
 {
     public static void MapLinkEndpoints(this WebApplication app)
     {
+        app.MapGet("/{code}", async (string code, LinkService service, CancellationToken cancellationToken) =>
+        {
+            var result = await service.ResolveAsync(code, cancellationToken);
+            return result.Status switch
+            {
+                ResolveLinkStatus.Found => Results.Redirect(result.TargetUrl!),
+                ResolveLinkStatus.Expired => Results.Problem(statusCode: 410, title: "Link expirado."),
+                _ => Results.Problem(statusCode: 404, title: "Link não encontrado.")
+            };
+        });
+
         app.MapPost("/api/links", async (CreateLinkRequest request, LinkService service,
             HttpRequest httpRequest, CancellationToken cancellationToken) =>
         {

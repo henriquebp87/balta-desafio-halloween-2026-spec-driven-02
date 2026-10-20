@@ -8,6 +8,51 @@ namespace UrlShortener.Api.Tests.Application;
 
 public sealed class LinkServiceTests
 {
+    [Theory]
+    [InlineData(null, ResolveLinkStatus.Found)]
+    [InlineData("2026-10-18T23:59:59Z", ResolveLinkStatus.Expired)]
+    [InlineData("2026-10-19T00:00:00Z", ResolveLinkStatus.Found)]
+    [InlineData("2026-10-20T00:00:00Z", ResolveLinkStatus.Found)]
+    public async Task ResolveHonorsExpirationDateThroughEndOfUtcDay(string? expiration, ResolveLinkStatus expected)
+    {
+        var link = new Link
+        {
+            Code = "ABC1234", TargetUrl = "https://8.8.8.8/path", ManagementKeyHash = "hash",
+            ExpiresAtUtc = expiration is null ? null : DateTimeOffset.Parse(expiration).UtcDateTime,
+            AccessCount = 12
+        };
+        var repository = new RecordingRepository { StoredLink = link };
+        var service = new LinkService(repository, () => throw new InvalidOperationException(),
+            new TargetUrlValidator(), new FixedTimeProvider());
+
+        var result = await service.ResolveAsync("ABC1234");
+
+        Assert.Equal(expected, result.Status);
+        Assert.Equal(expected == ResolveLinkStatus.Found ? link.TargetUrl : null, result.TargetUrl);
+        Assert.Equal("ABC1234", repository.RequestedCode);
+        Assert.Equal(12, link.AccessCount);
+        Assert.Empty(repository.Attempts);
+    }
+
+    [Fact]
+    public async Task ResolveMissingCodeReturnsNotFound()
+    {
+        var repository = new RecordingRepository();
+        var service = new LinkService(repository, () => throw new InvalidOperationException(), new TargetUrlValidator());
+
+        var result = await service.ResolveAsync("MISSING");
+
+        Assert.Equal(ResolveLinkStatus.NotFound, result.Status);
+        Assert.Null(result.TargetUrl);
+        Assert.Equal("MISSING", repository.RequestedCode);
+    }
+
+    private sealed class FixedTimeProvider : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow()
+            => new(2026, 10, 19, 23, 59, 59, TimeSpan.Zero);
+    }
+
     [Fact]
     public async Task CreatesAutomaticLinkWithDefaultsAndHashedManagementKey()
     {
@@ -117,6 +162,15 @@ public sealed class LinkServiceTests
 
     private sealed class RecordingRepository : ILinkRepository
     {
+        public Link? StoredLink { get; init; }
+        public string? RequestedCode { get; private set; }
+
+        public Task<Link?> FindByCodeAsync(string code, CancellationToken cancellationToken)
+        {
+            RequestedCode = code;
+            return Task.FromResult(StoredLink);
+        }
+
         public List<Link> Attempts { get; } = [];
         public int Collisions { get; init; }
         public bool Exists { get; init; }

@@ -6,12 +6,28 @@ using UrlShortener.Api.Domain;
 namespace UrlShortener.Api.Application;
 
 public sealed record CreateLinkResult(string? Code, string? ManagementKey, string? Error, bool IsConflict = false);
+public enum ResolveLinkStatus { Found, NotFound, Expired }
+public sealed record ResolveLinkResult(ResolveLinkStatus Status, string? TargetUrl = null);
 
 public sealed class LinkService(
     ILinkRepository repository,
     Func<string> generateCode,
-    TargetUrlValidator validator)
+    TargetUrlValidator validator,
+    TimeProvider? timeProvider = null)
 {
+    public async Task<ResolveLinkResult> ResolveAsync(string code, CancellationToken cancellationToken = default)
+    {
+        var link = await repository.FindByCodeAsync(code, cancellationToken);
+        if (link is null)
+            return new(ResolveLinkStatus.NotFound);
+
+        var todayUtc = (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime.Date;
+        if (link.ExpiresAtUtc is { } expiration && expiration.Date < todayUtc)
+            return new(ResolveLinkStatus.Expired);
+
+        return new(ResolveLinkStatus.Found, link.TargetUrl);
+    }
+
     public async Task<CreateLinkResult> CreateAsync(string? targetUrl, CancellationToken cancellationToken = default)
         => await CreateAsync(targetUrl, null, cancellationToken);
 

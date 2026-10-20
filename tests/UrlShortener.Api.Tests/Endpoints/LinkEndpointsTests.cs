@@ -18,6 +18,60 @@ namespace UrlShortener.Api.Tests.Endpoints;
 public sealed class LinkEndpointsTests
 {
     [Fact]
+    public async Task GetCreatedShortLinkReturns302WithTargetLocation()
+    {
+        await WithApi(async (client, _) =>
+        {
+            const string targetUrl = "https://8.8.8.8/path?source=short";
+            using var created = await client.PostAsJsonAsync("/api/links", new { targetUrl });
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+            var body = await created.Content.ReadFromJsonAsync<CreateLinkResponse>();
+
+            using var response = await client.GetAsync(body!.ShortUrl);
+
+            Assert.Equal(HttpStatusCode.Found, response.StatusCode);
+            Assert.Equal(targetUrl, response.Headers.Location!.ToString());
+        });
+    }
+
+    [Fact]
+    public async Task GetMissingCodeReturns404()
+    {
+        await WithApi(async (client, _) =>
+        {
+            using var response = await client.GetAsync("/MISSING");
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            Assert.Null(response.Headers.Location);
+        });
+    }
+
+    [Theory]
+    [InlineData(-1, HttpStatusCode.Gone)]
+    [InlineData(0, HttpStatusCode.Found)]
+    public async Task GetLinkHonorsUtcExpirationDate(int expirationDayOffset, HttpStatusCode expected)
+    {
+        await WithApi(async (client, options) =>
+        {
+            await using (var context = new AppDbContext(options))
+            {
+                context.Links.Add(new Link
+                {
+                    Code = "ABC1234", TargetUrl = "https://8.8.8.8/path", ManagementKeyHash = "hash",
+                    CreatedAtUtc = DateTime.UtcNow.AddDays(-2),
+                    ExpiresAtUtc = DateTime.UtcNow.Date.AddDays(expirationDayOffset)
+                });
+                await context.SaveChangesAsync();
+            }
+
+            using var response = await client.GetAsync("/ABC1234");
+
+            Assert.Equal(expected, response.StatusCode);
+            Assert.Equal(expected == HttpStatusCode.Found ? "https://8.8.8.8/path" : null,
+                response.Headers.Location?.ToString());
+        });
+    }
+
+    [Fact]
     public async Task PostCreatesLinkReturns201AndPersistsOnlyManagementKeyHash()
     {
         await WithApi(async (client, options) =>
@@ -139,7 +193,8 @@ public sealed class LinkEndpointsTests
         {
             var address = app.Services.GetRequiredService<IServer>().Features
                 .Get<IServerAddressesFeature>()!.Addresses.Single();
-            using var client = new HttpClient { BaseAddress = new Uri(address) };
+            using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+                { BaseAddress = new Uri(address) };
             await test(client, options);
         }
         finally
