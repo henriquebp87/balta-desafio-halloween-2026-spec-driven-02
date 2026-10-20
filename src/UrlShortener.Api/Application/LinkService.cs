@@ -25,6 +25,7 @@ public sealed class LinkService(
         if (link.ExpiresAtUtc is { } expiration && expiration.Date < todayUtc)
             return new(ResolveLinkStatus.Expired);
 
+        await repository.IncrementAccessCountAsync(link.Id, cancellationToken);
         return new(ResolveLinkStatus.Found, link.TargetUrl);
     }
 

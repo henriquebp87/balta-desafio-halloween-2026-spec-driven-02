@@ -18,6 +18,40 @@ namespace UrlShortener.Api.Tests.Endpoints;
 public sealed class LinkEndpointsTests
 {
     [Fact]
+    public async Task ConcurrentRepeatedAccessesIncrementPersistedCountWithoutLoss()
+    {
+        await WithApi(async (client, options) =>
+        {
+            const int initialCount = 12;
+            const int accessCount = 50;
+            await using (var context = new AppDbContext(options))
+            {
+                context.Links.Add(new Link
+                {
+                    Code = "COUNT123", TargetUrl = "https://8.8.8.8/path",
+                    CreatedAtUtc = DateTime.UtcNow, ManagementKeyHash = "hash", AccessCount = initialCount
+                });
+                await context.SaveChangesAsync();
+            }
+
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("CounterBot/1.0");
+            var responses = await Task.WhenAll(Enumerable.Range(0, accessCount)
+                .Select(_ => client.GetAsync("/COUNT123")));
+            foreach (var response in responses)
+            {
+                using (response)
+                {
+                    Assert.Equal(HttpStatusCode.Found, response.StatusCode);
+                    Assert.Equal("https://8.8.8.8/path", response.Headers.Location?.ToString());
+                }
+            }
+
+            await using var verification = new AppDbContext(options);
+            Assert.Equal(initialCount + accessCount, (await verification.Links.SingleAsync()).AccessCount);
+        });
+    }
+
+    [Fact]
     public async Task GetCreatedShortLinkReturns302WithTargetLocation()
     {
         await WithApi(async (client, _) =>
@@ -68,6 +102,9 @@ public sealed class LinkEndpointsTests
             Assert.Equal(expected, response.StatusCode);
             Assert.Equal(expected == HttpStatusCode.Found ? "https://8.8.8.8/path" : null,
                 response.Headers.Location?.ToString());
+            await using var verification = new AppDbContext(options);
+            Assert.Equal(expected == HttpStatusCode.Found ? 1 : 0,
+                (await verification.Links.SingleAsync()).AccessCount);
         });
     }
 

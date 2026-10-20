@@ -17,7 +17,7 @@ public sealed class LinkServiceTests
     {
         var link = new Link
         {
-            Code = "ABC1234", TargetUrl = "https://8.8.8.8/path", ManagementKeyHash = "hash",
+            Id = 42, Code = "ABC1234", TargetUrl = "https://8.8.8.8/path", ManagementKeyHash = "hash",
             ExpiresAtUtc = expiration is null ? null : DateTimeOffset.Parse(expiration).UtcDateTime,
             AccessCount = 12
         };
@@ -31,6 +31,8 @@ public sealed class LinkServiceTests
         Assert.Equal(expected == ResolveLinkStatus.Found ? link.TargetUrl : null, result.TargetUrl);
         Assert.Equal("ABC1234", repository.RequestedCode);
         Assert.Equal(12, link.AccessCount);
+        Assert.Equal(expected == ResolveLinkStatus.Found ? new long[] { link.Id } : [],
+            repository.IncrementedLinkIds);
         Assert.Empty(repository.Attempts);
     }
 
@@ -45,6 +47,7 @@ public sealed class LinkServiceTests
         Assert.Equal(ResolveLinkStatus.NotFound, result.Status);
         Assert.Null(result.TargetUrl);
         Assert.Equal("MISSING", repository.RequestedCode);
+        Assert.Empty(repository.IncrementedLinkIds);
     }
 
     private sealed class FixedTimeProvider : TimeProvider
@@ -162,6 +165,14 @@ public sealed class LinkServiceTests
 
     private sealed class RecordingRepository : ILinkRepository
     {
+        public List<long> IncrementedLinkIds { get; } = [];
+
+        public Task IncrementAccessCountAsync(long linkId, CancellationToken cancellationToken)
+        {
+            IncrementedLinkIds.Add(linkId);
+            return Task.CompletedTask;
+        }
+
         public Link? StoredLink { get; init; }
         public string? RequestedCode { get; private set; }
 
